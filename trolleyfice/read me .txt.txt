@@ -1,0 +1,7 @@
+==DISCLAIMER==
+ai was used to debug js and html
+==all versions==
+v1=basic prototype
+v2=added better animations
+v3=added particle effects
+v4= revamped the game entirely and blood effects
