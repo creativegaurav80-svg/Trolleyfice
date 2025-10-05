@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>TROLLEYFICE</title>
+<style>
+body {
+  margin:0;
+  background:#06050a;
+  font-family:'Courier New', monospace;
+  overflow:hidden;
+  color:#f2f2f2;
+}
+#game {
+  width:100vw;
+  height:100vh;
+  position:relative;
+}
+#canvas {
+  position:absolute;
+  left:50%;
+  top:10%;
+  transform:translateX(-50%);
+  border-radius:10px;
+  background:#111;
+  box-shadow:0 0 20px #000;
+}
+#narrator {
+  position:absolute;
+  top:5%;
+  width:90%;
+  left:5%;
+  padding:15px;
+  font-size:22px;
+  background:rgba(0,0,0,0.7);
+  border-radius:10px;
+  text-align:center;
+  color:#ff6b6b;
+  text-shadow:1px 1px #000;
+}
+#choices {
+  position:absolute;
+  bottom:8%;
+  width:100%;
+  display:flex;
+  justify-content:space-around;
+}
+.choice {
+  background:#222;
+  border:2px solid #f2f2f2;
+  padding:20px 40px;
+  cursor:pointer;
+  font-size:18px;
+  border-radius:8px;
+  transition:all 0.3s;
+}
+.choice:hover {
+  background:#f2f2f2;
+  color:#111;
+}
+#endScreen {
+  display:none;
+  position:absolute;
+  top:0;
+  left:0;
+  width:100%;
+  height:100%;
+  background:#111;
+  color:#f2f2f2;
+  font-size:24px;
+  text-align:center;
+  padding:50px;
+  box-sizing:border-box;
+}
+#endScreen button {
+  padding:15px 30px;
+  font-size:20px;
+  margin-top:30px;
+  cursor:pointer;
+  border-radius:10px;
+}
+</style>
+</head>
+<body>
+<div id="game">
+  <canvas id="canvas" width="700" height="350"></canvas>
+  <div id="narrator"></div>
+  <div id="choices"></div>
+  <div id="endScreen">
+    <div id="endText"></div>
+    <button onclick="restartGame()">Play Again</button>
+  </div>
+</div>
+
+<audio id="bgMusic" src="audio/bgMusic.mp3" loop></audio>
+<audio id="mockSound" src="audio/mock.mp3"></audio>
+<audio id="choiceSound" src="audio/choice.mp3"></audio>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const narrator = document.getElementById('narrator');
+const choicesDiv = document.getElementById('choices');
+const bgMusic = document.getElementById('bgMusic');
+const mockSound = document.getElementById('mockSound');
+const choiceSound = document.getElementById('choiceSound');
+const endScreen = document.getElementById('endScreen');
+const endText = document.getElementById('endText');
+
+let step = 0;
+let history = [];
+let typingTimer = null;
+let trolleyX = 275;
+
+// --- NEW: smoke particles and camera shake state ---
+let smokeParticles = []; // {x,y,vx,vy,alpha,life,size}
+let cameraShake = 0;     // current shake intensity
+const maxShake = 14;
+const smokeGravity = -0.03; // upward drift (negative y velocity deceleration)
+const smokeFadeRate = 0.004;
+
+const questions = [
+  {
+    text:"The trolley speeds ahead. Five workers on the left track. One child on the right. Who do you sacrifice?",
+    left:"Pull the switch: workers die.",
+    right:"Do nothing: child dies.",
+    insultLeft:["Workers were just numbers to you.","Heartless efficiency, nice.","Who needs empathy anyway?"],
+    insultRight:["You chose a child? Bold.","Little life ended, well done.","Brilliant choice, if you're a monster."],
+    leftCount:5,
+    rightCount:1
+  },
+  {
+    text:"Now the trolley hurtles toward an elderly man on the left. A young mother on the right. Who do you sacrifice?",
+    left:"Switch: elderly man dies.",
+    right:"Do nothing: young mother dies.",
+    insultLeft:["Old man gone. Easy.","Numbers over lives, classic.","Compassion? Never heard of it."],
+    insultRight:["A mother? Really?","Next time try heart.","Congratulations, new orphan created."],
+    leftCount:1,
+    rightCount:1
+  },
+  {
+    text:"Left track: three strangers. Right track: your closest friend. Who dies?",
+    left:"Switch: strangers die.",
+    right:"Do nothing: friend dies.",
+    insultLeft:["So friendship beats strangers.","Loyalty costs lives.","Nice math you did there."],
+    insultRight:["Friendship abandoned.","Cold, isn't it?","Not your problem anymore."],
+    leftCount:3,
+    rightCount:1
+  },
+  {
+    text:"A baby stands alone on the right. Three workers on the left. Your decision?",
+    left:"Switch: workers die.",
+    right:"Do nothing: baby dies.",
+    insultLeft:["Workers gone. Baby safe. Proud?","You monsters love efficiency.","Humanity: 0. You: 100."],
+    insultRight:["The baby is gone. Good job.","Cradle to grave, you skipped the cradle.","Monsters come in many forms."],
+    leftCount:3,
+    rightCount:1
+  },
+  {
+    text:"Left: group of teenagers. Right: an elderly woman. Who lives?",
+    left:"Switch: teens die.",
+    right:"Do nothing: woman dies.",
+    insultLeft:["Teens ended. Hope you sleep well.","Your choices age badly.","Youth sacrificed."],
+    insultRight:["Elderly gone. Thoughtful, isn't it?","Wisdom dies.","Smooth move, very mature."],
+    leftCount:4,
+    rightCount:1
+  },
+  {
+    text:"Final choice. Left: your mentor. Right: random stranger. Who dies?",
+    left:"Switch: mentor dies.",
+    right:"Do nothing: stranger dies.",
+    insultLeft:["Mentor gone. Regret later?","Guidance destroyed.","Classic betrayal."],
+    insultRight:["Stranger sacrificed. Moral choice?","Who cares?","Heartless finale."],
+    leftCount:1,
+    rightCount:1
+  }
+];
+
+function typeLine(text, callback){
+  clearInterval(typingTimer);
+  narrator.textContent = "";
+  let i = 0;
+  typingTimer = setInterval(()=>{
+    narrator.textContent += text[i];
+    i++;
+    if(i>=text.length){
+      clearInterval(typingTimer);
+      if(callback) callback();
+    }
+  },40);
+}
+
+// --- drawScene updated to apply camera shake and animate smoke ---
+function drawScene(leftCount,rightCount){
+  // camera shake offsets
+  let shakeX = 0, shakeY = 0;
+  if(cameraShake > 0){
+    shakeX = (Math.random() - 0.5) * cameraShake;
+    shakeY = (Math.random() - 0.5) * cameraShake;
+  }
+  // clear and translate for shake
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.save();
+  ctx.translate(shakeX, shakeY);
+
+  const W = canvas.width, H = canvas.height;
+  // tracks
+  ctx.strokeStyle="#555"; ctx.lineWidth=12;
+  ctx.beginPath(); ctx.moveTo(150,50); ctx.lineTo(150,H-50); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(450,50); ctx.lineTo(450,H-50); ctx.stroke();
+  // trolley
+  ctx.fillStyle="red";
+  ctx.fillRect(trolleyX,20,50,30);
+
+  // smoke: draw behind victims slightly (soft gradient)
+  for(let i=0;i<smokeParticles.length;i++){
+    const s = smokeParticles[i];
+    const grad = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, s.size*6);
+    grad.addColorStop(0, `rgba(140,140,140,${s.alpha*0.6})`);
+    grad.addColorStop(1, `rgba(40,40,40,0)`);
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, s.size*3, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  // victims left
+  ctx.fillStyle="#ffd6d6";
+  for(let i=0;i<leftCount;i++) ctx.fillRect(130,60+i*30,20,20);
+  // victims right
+  for(let i=0;i<rightCount;i++) ctx.fillRect(450,60+i*30,20,20);
+
+  ctx.restore(); // restore after shake translate
+
+  // update smoke physics and fade, done outside translate to keep consistent world coords
+  for(let i=smokeParticles.length-1;i>=0;i--){
+    const s = smokeParticles[i];
+    s.x += s.vx;
+    s.y += s.vy;
+    s.vy += smokeGravity; // gentle upward drift slowdown (negative gravity moves upward)
+    s.alpha -= smokeFadeRate;
+    s.life--;
+    if(s.alpha <= 0 || s.life <= 0) smokeParticles.splice(i,1);
+  }
+
+  // decay camera shake gradually
+  cameraShake = Math.max(0, cameraShake * 0.88);
+}
+
+// --- animateTrolley updated: spawn smoke while moving (from wheels) ---
+function animateTrolley(targetX, callback){
+  const speed = 5;
+  const interval = setInterval(()=>{
+    if(Math.abs(trolleyX-targetX)<=speed){
+      trolleyX = targetX;
+      clearInterval(interval);
+      drawScene(questions[step].leftCount,questions[step].rightCount);
+      if(callback) callback();
+    } else {
+      // spawn smoke each frame proportionally to movement speed
+      spawnSmokeFromWheels(trolleyX, Math.abs(targetX - trolleyX));
+      trolleyX += trolleyX<targetX? speed : -speed;
+      drawScene(questions[step].leftCount,questions[step].rightCount);
+    }
+  },20);
+}
+
+// spawn smoke particle(s) from two wheel positions (x provided is trolleyX)
+function spawnSmokeFromWheels(tX, movementMagnitude){
+  const wheelOffsets = [8, 34]; // positions inside the 50px trolley width
+  const baseY = 50; // near trolley bottom
+  const intensity = Math.min(6, 1 + Math.floor(movementMagnitude / 40)); // scale with movement
+  for(let w = 0; w < wheelOffsets.length; w++){
+    const wx = tX + wheelOffsets[w];
+    for(let i=0;i<intensity;i++){
+      const vx = (Math.random() - 0.5) * 0.6;
+      const vy = - (0.5 + Math.random()*1.2); // upward
+      const size = 6 + Math.random()*8;
+      const alpha = 0.18 + Math.random()*0.12;
+      const life = 60 + Math.floor(Math.random()*80);
+      smokeParticles.push({ x: wx + (Math.random()-0.5)*6, y: baseY + (Math.random()*6), vx, vy, size, alpha, life });
+    }
+  }
+}
+
+function nextQuestion(){
+  if(step>=questions.length){
+    endGame();
+    return;
+  }
+  const q = questions[step];
+  drawScene(q.leftCount,q.rightCount);
+  typeLine(q.text,()=>{
+    choicesDiv.innerHTML=`
+      <div class="choice" onclick="choose('left')">${q.left}</div>
+      <div class="choice" onclick="choose('right')">${q.right}</div>
+    `;
+  });
+}
+
+function choose(side){
+  const q = questions[step];
+  // play click sound
+  try{ choiceSound.currentTime = 0; choiceSound.play(); }catch(e){}
+  const insults = side==="left"?q.insultLeft:q.insultRight;
+  const insult = insults[Math.floor(Math.random()*insults.length)];
+  history.push(side==="left"?"Left: "+q.left:"Right: "+q.right);
+  animateTrolley(side==="left"?150:450,()=>{
+    // on impact: trigger camera shake and slightly more smoke burst
+    cameraShake = maxShake;
+    // spawn additional smoke burst at wheels and a little at tracks to emphasize impact
+    spawnSmokeFromWheels(trolleyX, 20);
+    spawnSmokeFromWheels(trolleyX, 20);
+    try{ mockSound.currentTime = 0; mockSound.play(); }catch(e){}
+    typeLine(insult,()=>{
+      step++;
+      setTimeout(nextQuestion,1000);
+    });
+  });
+}
+
+function endGame(){
+  choicesDiv.innerHTML="";
+  drawScene(0,0);
+  try{ bgMusic.pause(); }catch(e){}
+  let recap = "Your choices: ";
+  history.forEach(h=>recap+=h+" | ");
+  let endingText = "";
+  const leftChoices = history.filter(h=>h.startsWith("Left")).length;
+  if(leftChoices>=4) endingText="Ending: You are efficient but ruthless.\n"+recap;
+  else if(leftChoices>=2) endingText="Ending: Balanced but questionable.\n"+recap;
+  else endingText="Ending: Soft-hearted but careless.\n"+recap;
+  endText.textContent=endingText;
+  endScreen.style.display="block";
+}
+
+function restartGame(){
+  step=0;
+  history=[];
+  trolleyX=275;
+  smokeParticles = [];
+  cameraShake = 0;
+  endScreen.style.display="none";
+  try{ bgMusic.play(); }catch(e){}
+  nextQuestion();
+}
+
+// --- Continuous small render loop so smoke and camera shake animate smoothly even between actions ---
+(function continuousLoop(){
+  // update small particle physics and redraw current scene frequently
+  // choose current counts to draw properly (guard if step >= questions)
+  const current = questions[Math.min(step, questions.length - 1)];
+  const leftCount = current ? current.leftCount : 0;
+  const rightCount = current ? current.rightCount : 0;
+  // update smoke physics done inside drawScene after drawing (drawScene calls physics update)
+  drawScene(leftCount, rightCount);
+  requestAnimationFrame(continuousLoop);
+})();
+
+// start
+try{ bgMusic.play(); }catch(e){}
+nextQuestion();
+</script>
+</body>
+</html>

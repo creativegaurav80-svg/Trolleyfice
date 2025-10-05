@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>TROLLEYFICE</title>
+<style>
+body {
+  margin:0;
+  background:#06050a;
+  font-family:'Courier New', monospace;
+  overflow:hidden;
+  color:#f2f2f2;
+}
+#game {
+  width:100vw;
+  height:100vh;
+  position:relative;
+}
+#canvas {
+  position:absolute;
+  left:50%;
+  top:10%;
+  transform:translateX(-50%);
+  border-radius:10px;
+  background:#111;
+  box-shadow:0 0 20px #000;
+}
+#narrator {
+  position:absolute;
+  top:5%;
+  width:90%;
+  left:5%;
+  padding:15px;
+  font-size:22px;
+  background:rgba(0,0,0,0.7);
+  border-radius:10px;
+  text-align:center;
+  color:#ff6b6b;
+  text-shadow:1px 1px #000;
+}
+#choices {
+  position:absolute;
+  bottom:8%;
+  width:100%;
+  display:flex;
+  justify-content:space-around;
+}
+.choice {
+  background:#222;
+  border:2px solid #f2f2f2;
+  padding:20px 40px;
+  cursor:pointer;
+  font-size:18px;
+  border-radius:8px;
+  transition:all 0.3s;
+}
+.choice:hover {
+  background:#f2f2f2;
+  color:#111;
+}
+#endScreen {
+  display:none;
+  position:absolute;
+  top:0;
+  left:0;
+  width:100%;
+  height:100%;
+  background:#111;
+  color:#f2f2f2;
+  font-size:24px;
+  text-align:center;
+  padding:50px;
+  box-sizing:border-box;
+}
+#endScreen button {
+  padding:15px 30px;
+  font-size:20px;
+  margin-top:30px;
+  cursor:pointer;
+  border-radius:10px;
+}
+</style>
+</head>
+<body>
+<div id="game">
+  <canvas id="canvas" width="700" height="350"></canvas>
+  <div id="narrator"></div>
+  <div id="choices"></div>
+  <div id="endScreen">
+    <div id="endText"></div>
+    <button onclick="restartGame()">Play Again</button>
+  </div>
+</div>
+
+<audio id="bgMusic" src="audio/bgMusic.mp3" loop></audio>
+<audio id="mockSound" src="audio/mock.mp3"></audio>
+<audio id="choiceSound" src="audio/choice.mp3"></audio>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const narrator = document.getElementById('narrator');
+const choicesDiv = document.getElementById('choices');
+const bgMusic = document.getElementById('bgMusic');
+const mockSound = document.getElementById('mockSound');
+const choiceSound = document.getElementById('choiceSound');
+const endScreen = document.getElementById('endScreen');
+const endText = document.getElementById('endText');
+
+let step = 0;
+let history = [];
+let typingTimer = null;
+let trolleyX = 275;
+
+const questions = [
+  {
+    text:"The trolley speeds ahead. Five workers on the left track. One child on the right. Who do you sacrifice?",
+    left:"Pull the switch: workers die.",
+    right:"Do nothing: child dies.",
+    insultLeft:["Workers were just numbers to you.","Heartless efficiency, nice.","Who needs empathy anyway?"],
+    insultRight:["You chose a child? Bold.","Little life ended, well done.","Brilliant choice, if you're a monster."],
+    leftCount:5,
+    rightCount:1
+  },
+  {
+    text:"Now the trolley hurtles toward an elderly man on the left. A young mother on the right. Who do you sacrifice?",
+    left:"Switch: elderly man dies.",
+    right:"Do nothing: young mother dies.",
+    insultLeft:["Old man gone. Easy.","Numbers over lives, classic.","Compassion? Never heard of it."],
+    insultRight:["A mother? Really?","Next time try heart.","Congratulations, new orphan created."],
+    leftCount:1,
+    rightCount:1
+  },
+  {
+    text:"Left track: three strangers. Right track: your closest friend. Who dies?",
+    left:"Switch: strangers die.",
+    right:"Do nothing: friend dies.",
+    insultLeft:["So friendship beats strangers.","Loyalty costs lives.","Nice math you did there."],
+    insultRight:["Friendship abandoned.","Cold, isn't it?","Not your problem anymore."],
+    leftCount:3,
+    rightCount:1
+  },
+  {
+    text:"A baby stands alone on the right. Three workers on the left. Your decision?",
+    left:"Switch: workers die.",
+    right:"Do nothing: baby dies.",
+    insultLeft:["Workers gone. Baby safe. Proud?","You monsters love efficiency.","Humanity: 0. You: 100."],
+    insultRight:["The baby is gone. Good job.","Cradle to grave, you skipped the cradle.","Monsters come in many forms."],
+    leftCount:3,
+    rightCount:1
+  },
+  {
+    text:"Left: group of teenagers. Right: an elderly woman. Who lives?",
+    left:"Switch: teens die.",
+    right:"Do nothing: woman dies.",
+    insultLeft:["Teens ended. Hope you sleep well.","Your choices age badly.","Youth sacrificed."],
+    insultRight:["Elderly gone. Thoughtful, isn't it?","Wisdom dies.","Smooth move, very mature."],
+    leftCount:4,
+    rightCount:1
+  },
+  {
+    text:"Final choice. Left: your mentor. Right: random stranger. Who dies?",
+    left:"Switch: mentor dies.",
+    right:"Do nothing: stranger dies.",
+    insultLeft:["Mentor gone. Regret later?","Guidance destroyed.","Classic betrayal."],
+    insultRight:["Stranger sacrificed. Moral choice?","Who cares?","Heartless finale."],
+    leftCount:1,
+    rightCount:1
+  }
+];
+
+function typeLine(text, callback){
+  clearInterval(typingTimer);
+  narrator.textContent = "";
+  let i = 0;
+  typingTimer = setInterval(()=>{
+    narrator.textContent += text[i];
+    i++;
+    if(i>=text.length){
+      clearInterval(typingTimer);
+      if(callback) callback();
+    }
+  },40);
+}
+
+function drawScene(leftCount,rightCount){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  const W = canvas.width, H = canvas.height;
+  // tracks
+  ctx.strokeStyle="#555"; ctx.lineWidth=12;
+  ctx.beginPath(); ctx.moveTo(150,50); ctx.lineTo(150,H-50); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(450,50); ctx.lineTo(450,H-50); ctx.stroke();
+  // trolley
+  ctx.fillStyle="red";
+  ctx.fillRect(trolleyX,20,50,30);
+  // victims left
+  ctx.fillStyle="#ffd6d6";
+  for(let i=0;i<leftCount;i++) ctx.fillRect(130,60+i*30,20,20);
+  // victims right
+  for(let i=0;i<rightCount;i++) ctx.fillRect(450,60+i*30,20,20);
+}
+
+function animateTrolley(targetX, callback){
+  const speed = 5;
+  const interval = setInterval(()=>{
+    if(Math.abs(trolleyX-targetX)<=speed){
+      trolleyX = targetX;
+      clearInterval(interval);
+      drawScene(questions[step].leftCount,questions[step].rightCount);
+      if(callback) callback();
+    } else {
+      trolleyX += trolleyX<targetX? speed : -speed;
+      drawScene(questions[step].leftCount,questions[step].rightCount);
+    }
+  },20);
+}
+
+function nextQuestion(){
+  if(step>=questions.length){
+    endGame();
+    return;
+  }
+  const q = questions[step];
+  drawScene(q.leftCount,q.rightCount);
+  typeLine(q.text,()=>{
+    choicesDiv.innerHTML=`
+      <div class="choice" onclick="choose('left')">${q.left}</div>
+      <div class="choice" onclick="choose('right')">${q.right}</div>
+    `;
+  });
+}
+
+function choose(side){
+  const q = questions[step];
+  choiceSound.play();
+  const insults = side==="left"?q.insultLeft:q.insultRight;
+  const insult = insults[Math.floor(Math.random()*insults.length)];
+  history.push(side==="left"?"Left: "+q.left:"Right: "+q.right);
+  animateTrolley(side==="left"?150:450,()=>{
+    mockSound.play();
+    typeLine(insult,()=>{
+      step++;
+      setTimeout(nextQuestion,1000);
+    });
+  });
+}
+
+function endGame(){
+  choicesDiv.innerHTML="";
+  drawScene(0,0);
+  bgMusic.pause();
+  let recap = "Your choices: ";
+  history.forEach(h=>recap+=h+" | ");
+  let endingText = "";
+  const leftChoices = history.filter(h=>h.startsWith("Left")).length;
+  if(leftChoices>=4) endingText="Ending: You are efficient but ruthless.\n"+recap;
+  else if(leftChoices>=2) endingText="Ending: Balanced but questionable.\n"+recap;
+  else endingText="Ending: Soft-hearted but careless.\n"+recap;
+  endText.textContent=endingText;
+  endScreen.style.display="block";
+}
+
+function restartGame(){
+  step=0;
+  history=[];
+  trolleyX=275;
+  endScreen.style.display="none";
+  bgMusic.play();
+  nextQuestion();
+}
+
+bgMusic.play();
+nextQuestion();
+</script>
+</body>
+</html>
