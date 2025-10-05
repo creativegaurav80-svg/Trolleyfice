@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>TROLLEYFICE</title>
+<style>
+body {
+  margin: 0;
+  background: #06050a;
+  color: #f2f2f2;
+  font-family: 'Courier New', monospace;
+  overflow: hidden;
+}
+#game { width:100vw; height:100vh; position:relative; }
+#canvas { position:absolute; left:50%; top:10%; transform:translateX(-50%); border-radius:10px; background:#111; }
+#narrator {
+  position:absolute;
+  top:5%;
+  width:100%;
+  text-align:center;
+  font-size:20px;
+  color:#ff6b6b;
+  text-shadow:1px 1px #000;
+  padding:10px;
+}
+#choices {
+  position:absolute;
+  bottom:10%;
+  width:100%;
+  display:flex;
+  justify-content:space-around;
+}
+.choice {
+  background:#222;
+  border:2px solid #f2f2f2;
+  padding:20px 40px;
+  cursor:pointer;
+  font-size:18px;
+  transition:0.3s;
+}
+.choice:hover {
+  background:#f2f2f2;
+  color:#111;
+}
+</style>
+</head>
+<body>
+<div id="game">
+  <canvas id="canvas" width="600" height="320"></canvas>
+  <div id="narrator"></div>
+  <div id="choices"></div>
+</div>
+
+<audio id="mock1" src="audio/mock1.mp3"></audio>
+<audio id="mock2" src="audio/mock2.mp3"></audio>
+<audio id="mock3" src="audio/mock3.mp3"></audio>
+<audio id="ending" src="audio/ending.mp3"></audio>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const narrator = document.getElementById('narrator');
+const choicesDiv = document.getElementById('choices');
+
+let step = 0;
+let history = [];
+let typingTimer = null;
+
+const questions = [
+  {
+    text:"The trolley speeds ahead. Five workers on the left track. One child on the right. Who do you sacrifice?",
+    left:"Pull the switch: workers die.",
+    right:"Do nothing: child dies.",
+    insultLeft:"So the workers were disposable to you? Efficient, heartless, practical.",
+    insultRight:"A child? Really? You chose to end an entire life before it even started.",
+    leftCount:5,
+    rightCount:1
+  },
+  {
+    text:"Now the trolley hurtles toward an elderly man on the left. A young mother on the right. Who do you sacrifice?",
+    left:"Switch: elderly man dies.",
+    right:"Do nothing: young mother dies.",
+    insultLeft:"An old man gone. Easy choice, wasn't it? Just a number to you.",
+    insultRight:"You killed a mother. A child now cries alone because of you.",
+    leftCount:1,
+    rightCount:1
+  },
+  {
+    text:"Left track: three strangers. Right track: your closest friend. Who dies?",
+    left:"Switch: strangers die.",
+    right:"Do nothing: friend dies.",
+    insultLeft:"So friendship outweighs three lives. Very noble of you.",
+    insultRight:"You abandoned your friend. Loyalty clearly means nothing here.",
+    leftCount:3,
+    rightCount:1
+  }
+];
+
+function typeLine(text, callback){
+  clearInterval(typingTimer);
+  narrator.textContent = "";
+  let i = 0;
+  typingTimer = setInterval(()=>{
+    narrator.textContent += text[i];
+    i++;
+    if(i>=text.length){
+      clearInterval(typingTimer);
+      if(callback) callback();
+    }
+  }, 40);
+}
+
+function drawScene(leftCount,rightCount){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  const W = canvas.width, H = canvas.height;
+  // track
+  ctx.strokeStyle="#444"; ctx.lineWidth=12;
+  ctx.beginPath(); ctx.moveTo(150,50); ctx.lineTo(150,H-50); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(450,50); ctx.lineTo(450,H-50); ctx.stroke();
+  // trolley
+  ctx.fillStyle="red";
+  ctx.fillRect(275,20,50,30);
+  // left victims
+  ctx.fillStyle="#ffd6d6";
+  for(let i=0;i<leftCount;i++){
+    ctx.fillRect(130,60+i*30,20,20);
+  }
+  // right victims
+  for(let i=0;i<rightCount;i++){
+    ctx.fillRect(450,60+i*30,20,20);
+  }
+}
+
+function nextQuestion(){
+  if(step>=questions.length){
+    endGame();
+    return;
+  }
+  const q=questions[step];
+  typeLine(q.text,()=>{
+    drawScene(q.leftCount,q.rightCount);
+    choicesDiv.innerHTML=`
+      <div class="choice" onclick="choose('left')">${q.left}</div>
+      <div class="choice" onclick="choose('right')">${q.right}</div>
+    `;
+  });
+}
+
+function choose(side){
+  const q = questions[step];
+  if(side==="left"){
+    typeLine(q.insultLeft,()=>{
+      history.push("Left choice: "+q.left);
+      step++;
+      setTimeout(nextQuestion,1000);
+    });
+  } else {
+    typeLine(q.insultRight,()=>{
+      history.push("Right choice: "+q.right);
+      step++;
+      setTimeout(nextQuestion,1000);
+    });
+  }
+}
+
+function endGame(){
+  choicesDiv.innerHTML="";
+  let recap = "Your legacy of choices: ";
+  history.forEach(h=>recap+=h+" ");
+  typeLine(recap+"Satisfied?",()=>{document.getElementById("ending").play();});
+  drawScene(0,0);
+}
+
+nextQuestion();
+</script>
+</body>
+</html>
