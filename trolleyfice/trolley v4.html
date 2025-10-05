@@ -1,0 +1,419 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>TROLLEYFICE</title>
+<style>
+  html,body{height:100%;margin:0;background:#06050a;color:#eaeff2;font-family:"Courier New",monospace;}
+  #game{width:100vw;height:100vh;position:relative;overflow:hidden}
+  canvas{display:block;margin-left:auto;margin-right:auto;margin-top:6vh;border-radius:12px;background:#0b0f12;box-shadow:0 24px 80px rgba(0,0,0,0.7)}
+  #narrator{position:absolute;left:5%;top:4%;width:90%;padding:14px;background:rgba(0,0,0,0.6);border-radius:10px;text-align:center;color:#ff6b6b;font-size:20px}
+  #choices{position:absolute;left:0;right:0;bottom:6%;display:flex;justify-content:center;gap:12px}
+  .choice{background:#222;border:2px solid #ddd;color:#f2f2f2;padding:12px 22px;border-radius:8px;cursor:pointer;min-width:260px;text-align:center}
+  .choice:hover{transform:translateY(-3px);background:#f2f2f2;color:#111}
+  .choice.disabled{opacity:0.55;pointer-events:none;background:#2a2a2a;color:#cfcfcf}
+  .choice.final{background:#6b2a2a;border-color:#9b4b4b;color:#fff;box-shadow:inset 0 6px 14px rgba(0,0,0,0.5)}
+  #endScreen{display:none;position:absolute;inset:0;background:rgba(2,2,4,0.95);align-items:center;justify-content:center;display:flex}
+  .endCard{background:#0b0f12;padding:28px;border-radius:12px;color:#f2f2f2;max-width:760px;text-align:center}
+  .small{font-size:12px;color:#9fb0bd;margin-top:8px}
+</style>
+</head>
+<body>
+<div id="game">
+  <canvas id="canvas" width="980" height="640" aria-label="Trolleyfice canvas"></canvas>
+  <div id="narrator">Click the canvas to start the game.</div>
+  <div id="choices"></div>
+
+  <div id="endScreen">
+    <div class="endCard">
+      <div id="endText"></div>
+      <button id="replayBtn">Play Again</button>
+      <div class="small">Credits: Ekam Sethi</div>
+    </div>
+  </div>
+</div>
+
+<audio id="bgMusic" src="audio/bgMusic.mp3" loop></audio>
+<audio id="choiceSound" src="audio/choice.mp3"></audio>
+<audio id="mockSound" src="audio/mock.mp3"></audio>
+<audio id="impactSound" src="audio/impact.mp3"></audio>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+const narrator = document.getElementById('narrator');
+const choicesDiv = document.getElementById('choices');
+const endScreen = document.getElementById('endScreen');
+const endText = document.getElementById('endText');
+const replayBtn = document.getElementById('replayBtn');
+const audio = { bg: document.getElementById('bgMusic'), choice: document.getElementById('choiceSound'), mock: document.getElementById('mockSound'), impact: document.getElementById('impactSound') };
+function safePlay(a){ if(!a) return; try{ a.currentTime = 0; a.play().catch(()=>{}); }catch(e){} }
+
+let step = 0;
+let history = [];
+let trolleyX = 440;
+let cameraShake = 0;
+const MAX_SHAKE = 16;
+let smoke = [];
+let bloodParticles = [];
+let gore = [];
+let stains = [];
+let victimStates = [];
+
+const questions = [
+  { text:"The trolley speeds ahead. Five workers on the left track. One child on the right. Who do you sacrifice?", left:"Pull the switch: workers die.", right:"Do nothing: child dies.", leftCount:5, rightCount:1, insultLeft:["Workers were numbers to you.","Heartless efficiency."], insultRight:["You let a child die.","Cold move."] },
+  { text:"Now the trolley hurtles toward an elderly man on the left. A young mother on the right. Who do you sacrifice?", left:"Flip: elderly man dies.", right:"Do nothing: mother dies.", leftCount:1, rightCount:1, insultLeft:["Old man gone.","Easy choice."], insultRight:["Mother gone.","Nice choice."] },
+  { text:"Left: three strangers. Right: your closest friend. Who dies?", left:"Switch: strangers die.", right:"Do nothing: friend dies.", leftCount:3, rightCount:1, insultLeft:["You traded strangers.","Pragmatic."], insultRight:["Friend lost.","Cold heart."] },
+  { text:"A baby stands on the right. Three workers on the left. Your decision?", left:"Switch: workers die.", right:"Do nothing: baby dies.", leftCount:3, rightCount:1, insultLeft:["Baby saved — for now."], insultRight:["You let a baby die."] },
+  { text:"Left: group of teenagers. Right: an elderly woman. Who lives?", left:"Switch: teens die.", right:"Do nothing: woman dies.", leftCount:4, rightCount:1, insultLeft:["Youth lost."], insultRight:["Wisdom gone."] },
+  { text:"Final: Left: your mentor. Right: a stranger. Who dies?", left:"Switch: mentor dies.", right:"Do nothing: stranger dies.", leftCount:1, rightCount:1, insultLeft:["Betrayal."], insultRight:["You left a stranger to die."] }
+];
+
+let typeTimer = null;
+function typeText(text, speed=24){
+  clearInterval(typeTimer);
+  narrator.textContent = '';
+  let i=0;
+  return new Promise(resolve=>{
+    typeTimer = setInterval(()=>{
+      narrator.textContent += text[i] || '';
+      i++;
+      if(i >= text.length){ clearInterval(typeTimer); resolve(); }
+    }, speed);
+  });
+}
+
+function roundRect(ctx,x,y,w,h,r,fill){
+  if(typeof r === 'undefined') r = 5;
+  if(typeof r === 'number') r = {tl:r,tr:r,br:r,bl:r};
+  ctx.beginPath();
+  ctx.moveTo(x + r.tl, y);
+  ctx.lineTo(x + w - r.tr, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r.tr);
+  ctx.lineTo(x + w, y + h - r.br);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r.br, y + h);
+  ctx.lineTo(x + r.bl, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r.bl);
+  ctx.lineTo(x, y + r.tl);
+  ctx.quadraticCurveTo(x, y, x + r.tl, y);
+  ctx.closePath();
+  if(fill) ctx.fill();
+}
+
+function drawTracks(){
+  const startY = H - 120;
+  ctx.save();
+  for(let i=0;i<16;i++){
+    const x = 50 + i*56;
+    const wob = Math.sin(i*0.6 + performance.now()/800)*1.4;
+    ctx.fillStyle = '#3b260f';
+    roundRect(ctx, x + wob, startY - 6, 42, 12, 3, true);
+    ctx.fillStyle = 'rgba(255,255,255,0.018)';
+    ctx.fillRect(x + wob + 3, startY - 5, 2, 8);
+  }
+  ctx.restore();
+  ctx.lineWidth = 10;
+  ctx.strokeStyle = '#494f55';
+  ctx.beginPath(); ctx.moveTo(180,40); ctx.lineTo(180,H - 50); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(620,40); ctx.lineTo(620,H - 50); ctx.stroke();
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  for(let y=80;y<H-60;y+=36){
+    ctx.beginPath(); ctx.arc(180, y + Math.sin(y/80 + performance.now()/900)*2, 3, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(620, y + Math.cos(y/90 + performance.now()/900)*2, 3, 0, Math.PI*2); ctx.fill();
+  }
+}
+
+function drawTrolley(){
+  const bx = trolleyX, by = 30, bw = 90, bh = 36;
+  const g = ctx.createLinearGradient(bx, by, bx + bw, by + bh);
+  g.addColorStop(0, '#8b2b2b'); g.addColorStop(0.5, '#7d2a2a'); g.addColorStop(1, '#5f2020');
+  ctx.fillStyle = g;
+  roundRect(ctx, bx, by, bw, bh, 6, true);
+  ctx.fillStyle = 'rgba(255,255,255,0.05)';
+  ctx.fillRect(bx + 10, by + 4, bw - 20, 6);
+  for(let r=0;r<4;r++){
+    const rx = bx + 16 + r*16;
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.beginPath(); ctx.arc(rx, by + bh - 8, 2.5, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.06)';
+    ctx.beginPath(); ctx.arc(rx, by + 5, 1.2, 0, Math.PI*2); ctx.fill();
+  }
+  ctx.fillStyle = '#081012';
+  ctx.fillRect(bx + 26, by + 12, bw - 52, 12);
+  ctx.fillStyle = '#1b1b1b';
+  ctx.fillRect(bx + 8, by + bh - 6, 22, 8);
+  ctx.fillRect(bx + bw - 30, by + bh - 6, 22, 8);
+  ctx.strokeStyle = 'rgba(255,255,255,0.03)';
+  ctx.beginPath(); ctx.moveTo(bx + 6, by + 2); ctx.lineTo(bx + bw - 6, by + 2); ctx.stroke();
+}
+
+function drawPerson(x,y,alive,idx){
+  const hue = (120 + (idx*37)) % 360;
+  const clothG = ctx.createLinearGradient(x, y+8, x+20, y+18);
+  clothG.addColorStop(0, `hsl(${hue}, 55%, ${alive ? '46%' : '24%'})`);
+  clothG.addColorStop(1, `hsl(${(hue+30)%360}, 55%, ${alive ? '32%' : '18%'})`);
+  ctx.fillStyle = clothG;
+  roundRect(ctx, x, y+8, 20, 12, 3, true);
+  ctx.beginPath();
+  ctx.fillStyle = alive ? '#ffe0c4' : 'rgba(120,80,70,0.7)';
+  ctx.arc(x+10, y+5, 5.6, 0, Math.PI*2);
+  ctx.fill();
+  ctx.fillStyle = alive ? `hsl(${(hue+320)%360},18%,12%)` : 'rgba(30,20,20,0.7)';
+  ctx.beginPath(); ctx.ellipse(x+10, y+3.8, 5.8, 3.2, 0, 0, Math.PI*2); ctx.fill();
+  if(alive){
+    ctx.fillStyle = '#222';
+    ctx.fillRect(x+7.8, y+4.6, 0.9, 0.9);
+    ctx.fillRect(x+11.6, y+4.6, 0.9, 0.9);
+  } else {
+    ctx.fillStyle = 'rgba(160,10,10,0.9)';
+    ctx.fillRect(x+6, y+6, 8, 3);
+  }
+}
+
+function spawnSmoke(tX, magnitude){
+  const offsets = [16, 64];
+  const baseY = 68;
+  const intensity = Math.min(6, 1 + Math.floor(magnitude / 40));
+  for(let w=0; w<offsets.length; w++){
+    const wx = tX + offsets[w];
+    for(let i=0;i<intensity;i++){
+      smoke.push({
+        x: wx + (Math.random()-0.5)*6,
+        y: baseY + (Math.random()*6),
+        vx: (Math.random()-0.5)*0.6,
+        vy: - (0.6 + Math.random()*1.4),
+        size: 5 + Math.random()*8,
+        alpha: 0.18 + Math.random()*0.12,
+        life: 60 + Math.floor(Math.random()*80)
+      });
+    }
+  }
+}
+
+function spawnBloodAt(x,y){
+  stains.push({ x: x+10 + (Math.random()-0.5)*6, y: y+12 + (Math.random()-0.5)*4, r: 12 + Math.random()*18, alpha: 0.38 + Math.random()*0.3 });
+  const count = 18 + Math.floor(Math.random()*28);
+  for(let i=0;i<count;i++){
+    if(bloodParticles.length > 900) break;
+    const ang = (Math.random()*Math.PI) - Math.PI/2;
+    const spd = 1 + Math.random()*6;
+    bloodParticles.push({
+      x: x+10,
+      y: y+10,
+      vx: Math.cos(ang)*spd + (Math.random()-0.5),
+      vy: Math.sin(ang)*spd + (Math.random()*1.5),
+      size: 1 + Math.random()*4,
+      life: 600 + Math.random()*900,
+      maxLife: 600 + Math.random()*900,
+      rot: Math.random()*Math.PI,
+      rotv: (Math.random()-0.5)*0.12
+    });
+  }
+  const shards = 2 + Math.floor(Math.random()*6);
+  for(let i=0;i<shards;i++){
+    if(gore.length > 250) break;
+    const ang = Math.random()*Math.PI*2;
+    const spd = 0.6 + Math.random()*3.5;
+    gore.push({
+      x: x+12 + (Math.random()-0.5)*6,
+      y: y+11 + (Math.random()-0.5)*6,
+      vx: Math.cos(ang)*spd,
+      vy: Math.sin(ang)*spd - (Math.random()*1.2),
+      size: 2 + Math.random()*4,
+      life: 800 + Math.random()*900,
+      maxLife: 800 + Math.random()*900,
+      rot: Math.random()*Math.PI,
+      rotv: (Math.random()-0.5)*0.2
+    });
+  }
+  safePlay(audio.impact);
+}
+
+function updateAll(dt){
+  for(let i=smoke.length-1;i>=0;i--){
+    const s = smoke[i];
+    s.x += s.vx; s.y += s.vy; s.vy += -0.03; s.alpha -= 0.004; s.life--;
+    if(s.alpha <= 0 || s.life <= 0) smoke.splice(i,1);
+  }
+  for(let i=bloodParticles.length-1;i>=0;i--){
+    const b = bloodParticles[i];
+    b.x += b.vx; b.y += b.vy; b.vy += 0.25; b.vx *= 0.998; b.life -= dt; b.rot += b.rotv;
+    if(b.life <= 0) bloodParticles.splice(i,1);
+  }
+  for(let i=gore.length-1;i>=0;i--){
+    const g = gore[i];
+    g.x += g.vx; g.y += g.vy; g.vy += 0.28; g.life -= dt; g.rot += g.rotv;
+    if(g.life <= 0) gore.splice(i,1);
+  }
+  for(let i=stains.length-1;i>=0;i--){
+    stains[i].alpha = Math.max(0.06, stains[i].alpha - 0.00004);
+  }
+  cameraShake = Math.max(0, cameraShake * 0.86);
+}
+
+function render(){
+  ctx.clearRect(0,0,W,H);
+  const sx = (cameraShake>0) ? (Math.random()-0.5) * cameraShake : 0;
+  const sy = (cameraShake>0) ? (Math.random()-0.5) * cameraShake : 0;
+  ctx.save(); ctx.translate(sx, sy);
+  ctx.fillStyle = '#0b0f12'; ctx.fillRect(0,0,W,H);
+  drawTracks();
+  for(let i=0;i<stains.length;i++){
+    const s = stains[i];
+    const gr = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, s.r*1.6);
+    gr.addColorStop(0, `rgba(120,10,10,${s.alpha})`);
+    gr.addColorStop(1, 'rgba(120,10,10,0)');
+    ctx.fillStyle = gr;
+    ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI*2); ctx.fill();
+  }
+  const q = questions[Math.min(step, questions.length-1)];
+  if(q){
+    for(let i=0;i<q.leftCount;i++){
+      const idx = i;
+      const alive = (victimStates[idx] !== false);
+      drawPerson(120, 60 + i*30, alive, idx);
+    }
+    for(let j=0;j<q.rightCount;j++){
+      const idx = q.leftCount + j;
+      const alive = (victimStates[idx] !== false);
+      drawPerson(440, 60 + j*30, alive, idx);
+    }
+  }
+  drawTrolley();
+  ctx.restore();
+  for(let i=0;i<smoke.length;i++){
+    const s = smoke[i];
+    const g = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, s.size*3);
+    g.addColorStop(0, `rgba(160,160,160,${Math.max(0, s.alpha*0.6)})`);
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(s.x, s.y, s.size*2.2, 0, Math.PI*2); ctx.fill();
+  }
+  for(let i=0;i<bloodParticles.length;i++){
+    const b = bloodParticles[i];
+    const r = Math.max(0.02, b.life / b.maxLife);
+    ctx.fillStyle = `rgba(160,10,10,${r})`;
+    ctx.beginPath();
+    ctx.ellipse(b.x, b.y, b.size * r, b.size * r, b.rot || 0, 0, Math.PI*2);
+    ctx.fill();
+  }
+  for(let i=0;i<gore.length;i++){
+    const f = gore[i];
+    const r = Math.max(0.02, f.life / f.maxLife);
+    ctx.fillStyle = `rgba(230,230,210,${r})`;
+    ctx.beginPath(); ctx.ellipse(f.x, f.y, f.size * 0.9, f.size * 0.6, f.rot || 0, 0, Math.PI*2); ctx.fill();
+  }
+}
+
+let last = performance.now();
+function loop(ts){
+  const dt = Math.min(40, ts - last);
+  last = ts;
+  updateAll(dt);
+  render();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+function animateTrolleyTo(targetX){
+  return new Promise(resolve=>{
+    const speed = 6;
+    const iv = setInterval(()=>{
+      const dist = Math.abs(trolleyX - targetX);
+      if(dist <= speed){
+        trolleyX = targetX;
+        clearInterval(iv);
+        resolve();
+      } else {
+        spawnSmoke(trolleyX, dist);
+        trolleyX += trolleyX < targetX ? speed : -speed;
+      }
+    }, 20);
+  });
+}
+
+function killVictimsForSide(q, side){
+  const left = q.leftCount;
+  if(side === 'left'){
+    for(let i=0;i<q.leftCount;i++){
+      if(victimStates[i] !== false){
+        victimStates[i] = false;
+        spawnBloodAt(120, 60 + i*30);
+      }
+    }
+  } else {
+    for(let j=0;j<q.rightCount;j++){
+      const idx = left + j;
+      if(victimStates[idx] !== false){
+        victimStates[idx] = false;
+        spawnBloodAt(440, 60 + j*30);
+      }
+    }
+  }
+}
+
+function makeChoicesForQuestion(q){
+  choicesDiv.innerHTML = '';
+  const leftBtn = document.createElement('button');
+  leftBtn.className = 'choice';
+  leftBtn.textContent = q.left;
+  const rightBtn = document.createElement('button');
+  rightBtn.className = 'choice';
+  rightBtn.textContent = q.right;
+  leftBtn.addEventListener('click', ()=> finalizeChoice('left', leftBtn, [leftBtn, rightBtn]));
+  rightBtn.addEventListener('click', ()=> finalizeChoice('right', rightBtn, [leftBtn, rightBtn]));
+  choicesDiv.appendChild(leftBtn);
+  choicesDiv.appendChild(rightBtn);
+}
+
+async function finalizeChoice(side, chosenBtn, allBtns){
+  allBtns.forEach(b=>{ b.classList.add('disabled'); b.disabled = true; });
+  chosenBtn.classList.remove('disabled'); chosenBtn.classList.add('final'); chosenBtn.disabled = true;
+  safePlay(audio.choice);
+  const q = questions[step];
+  history.push((side === 'left' ? "Left: " : "Right: ") + (side === 'left' ? q.left : q.right));
+  const targetX = (side === 'left') ? 220 : 520;
+  await animateTrolleyTo(targetX);
+  killVictimsForSide(q, side);
+  cameraShake = MAX_SHAKE;
+  spawnSmoke(trolleyX, 28); spawnSmoke(trolleyX, 28);
+  const insults = (side === 'left') ? q.insultLeft : q.insultRight;
+  const ins = insults[Math.floor(Math.random()*insults.length)];
+  safePlay(audio.mock);
+  await typeText(ins);
+  step++;
+  setTimeout(()=> { if(step < questions.length) prepareQuestion(); else showEnding(); }, 900);
+}
+
+function prepareQuestion(){
+  const q = questions[step];
+  victimStates = new Array(q.leftCount + q.rightCount).fill(true);
+  trolleyX = 440;
+  typeText(q.text).then(()=> makeChoicesForQuestion(q));
+}
+
+function showEnding(){
+  choicesDiv.innerHTML = '';
+  safePlay(audio.bg);
+  const leftChoices = history.filter(h=>h.startsWith('Left')).length;
+  const verdict = leftChoices >= 4 ? 'Efficient but ruthless.' : leftChoices >= 2 ? 'Balanced but questionable.' : 'Soft-hearted but careless.';
+  const recap = history.join(' | ');
+  endText.textContent = `Ending: ${verdict}\n${recap}`;
+  endScreen.style.display = 'flex';
+}
+
+replayBtn.addEventListener('click', ()=> {
+  step = 0; history = []; trolleyX = 440; cameraShake = 0; smoke = []; bloodParticles = []; gore = []; stains = []; victimStates = [];
+  endScreen.style.display = 'none'; prepareQuestion();
+});
+
+canvas.addEventListener('click', function startup(){
+  canvas.removeEventListener('click', startup);
+  safePlay(audio.bg);
+  prepareQuestion();
+});
+</script>
+</body>
+</html>
